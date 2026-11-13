@@ -2,6 +2,7 @@ import uuid,csv,io
 from fastapi import HTTPException
 from sqlalchemy import select
 from src.models import AuditReport,GroupReview
+from src.services.pareto import format_intervals
 from src.services.runs import require_completed
 from src.utils.time import now
 from src.utils.serialization import serialize
@@ -11,10 +12,17 @@ def create(db,payload,user):
  if not reviews or reviews[0].decision!="accepted": raise HTTPException(409,"最新复核须为接受后才能归档")
  if db.scalar(select(AuditReport).where(AuditReport.run_id==payload.run_id)): raise HTTPException(409,"本次计算已归档")
  item=AuditReport(id=str(uuid.uuid4()),published_by=user["email"],created_at=now(),**payload.model_dump());db.add(item);db.commit();return serialize(item)
+
 def export(db,id):
  report=db.get(AuditReport,id)
  if not report: raise HTTPException(404,"归档报告不存在")
  run=require_completed(db,report.run_id)
  buf=io.StringIO();cols=["group","n","selected","qualified","tp","fp","fn","tn","selection_rate","tpr","fpr"]
  writer=csv.DictWriter(buf,cols,extrasaction="ignore");writer.writeheader();writer.writerows(run.result["groups"])
- return "\ufeff"+buf.getvalue()
+ frontier=run.result.get("frontier") or []
+ if frontier:
+  buf.write("\nfrontier_selection_gap,frontier_accuracy,frontier_raw_correct,frontier_raw_n,frontier_pareto,frontier_threshold_intervals\n")
+  line=csv.writer(buf,lineterminator="\n")
+  for point in frontier:
+   line.writerow([point["selection_gap"],point["accuracy"],point.get("correct",""),point.get("n",""),point.get("pareto", ""),format_intervals(point)])
+ return "﻿"+buf.getvalue()
